@@ -9,9 +9,10 @@ checks:
 ```
 
 to perform TCP connectivity checks and print the results :
+```
 OK: google
 BAD: mysite
-
+```
 
 ## in java
 
