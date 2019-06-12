@@ -15,7 +15,7 @@ BAD: mysite
 
 ## in java
 
-the project is build using maven 
+the project is build using maven to build ( and has a single dependency, managed by maven, to parse yaml : snakeyaml )
 The single test runs against the test input file
 
 From the java directory :
@@ -37,6 +37,8 @@ From the bash directory :
 
 bash connectivityTest.sh  ../java/src/test/resources/input.yml
 
+
+
 ## in python
 
 From the python directory :
@@ -45,3 +47,8 @@ python2 connectivityTest.py  ../java/src/test/resources/input.yml
 or
 python3 connectivityTest.py  ../java/src/test/resources/input.yml
 
+
+## conclusion
+Code works in any language, but shell is very slow and bad at parsing data.
+Python is very short and runs reasonably fast.
+Java works fastest but is quite verbose. And java lacks native yaml support (and also lacks native json support by the way)
