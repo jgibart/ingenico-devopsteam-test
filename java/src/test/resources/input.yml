@@ -1,4 +1,4 @@
 checks:
-     ping:
-          google: google.com:443
-          mysite: mytest.test:443
+  ping:
+    google: google.com:443
+    mysite: mytest.test:443
