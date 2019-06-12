@@ -33,6 +33,15 @@ java -jar target/ingenico-test-1.0-SNAPSHOT.jar  src/test/resources/input.yml
 
 ## in shell
 
+From the bash directory :
+
+bash connectivityTest.sh  ../java/src/test/resources/input.yml
 
 ## in python
+
+From the python directory :
+
+python2 connectivityTest.py  ../java/src/test/resources/input.yml
+or
+python3 connectivityTest.py  ../java/src/test/resources/input.yml
 
