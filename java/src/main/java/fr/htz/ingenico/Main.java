@@ -1,6 +1,7 @@
 package fr.htz.ingenico;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -62,6 +63,11 @@ public class Main   {
 			//Could also print the cause
 			//System.out.println("BAD: "+name + "("+e.toString()+")");
 			
+		} finally {
+			try {
+				socket.close();
+			} catch (IOException e) {
+			}
 		}
 		
 	}
