@@ -65,6 +65,7 @@ public class Main   {
 			
 		} finally {
 			try {
+				socket.setSoLinger(true, 0);
 				socket.close();
 			} catch (IOException e) {
 			}

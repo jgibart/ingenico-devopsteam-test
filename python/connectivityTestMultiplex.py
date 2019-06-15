@@ -7,13 +7,19 @@ import socket
 import select
 import time
 import errno
+import struct
 
 pending = []
+
+def closeSocket(s):
+  s.setblocking(1)
+  s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+  s.close()
 
 def closeCtx(ctx):
   global pending
   s = ctx["socket"]
-  s.close()
+  closeSocket(s)
   pending.remove(ctx)
   
 def checkPending():
@@ -56,19 +62,19 @@ def checkConnectivity( key, host, port):
     err = s.connect_ex( ( host, port))
     if err == 0:
       print("OK: "+key)
-      s.close()
+      closeSocket(s)
     elif errno.errorcode[err] == "EINPROGRESS":
       pending.append( context)
     else:
       #print( "BAD: "+key + " "+errno.errorcode[err])
       print( "BAD: "+key  )
-      s.close()
+      closeSocket(s)
   except:
       #print( "BAD: "+key +" "+ str(sys.exc_info()[0]) )
       print( "BAD: "+key  )
-      s.close()
+      closeSocket(s)
+      
 def processInputFile(file):
-  print (file)
   with open(file, 'r') as stream:
     try:
         config = yaml.safe_load(stream)

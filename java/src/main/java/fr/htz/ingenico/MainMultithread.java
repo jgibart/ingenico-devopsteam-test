@@ -28,6 +28,7 @@ public class MainMultithread   {
 
     protected ExecutorService threadPool;
     final int numThreads= 200;
+    int timeout = 30000;
 	List<Context> contexts = new LinkedList<Context>();
 
     static class Context  {
@@ -56,7 +57,7 @@ public class MainMultithread   {
 			ctx.result.get();
 
 			System.out.println(String.format("%s: %s", ctx.success ? "OK":"BAD", ctx.key));
-//			System.out.println(String.format("%s: %s%s", ctx.success ? "OK":"BAD", ctx.key, (ctx.exception == null ? "" :ctx.exception .toString() ) ));
+			//System.out.println(String.format("%s: %s%s", ctx.success ? "OK":"BAD", ctx.key, (ctx.exception == null ? "" :ctx.exception .toString() ) ));
 		}
 
         threadPool.shutdown();
@@ -107,13 +108,14 @@ public class MainMultithread   {
 	    		throw new IllegalStateException("Unexpected number format in "+parts[1]);
 			}
 			InetSocketAddress endpoint = new InetSocketAddress(InetAddress.getByName(host), port);
-			socket.connect(endpoint, 30000);
+			socket.connect(endpoint, timeout);
 			testToDo.success = true;
 		} catch (Exception e) {
 			testToDo.success = false;
 			testToDo.exception  = e;
 		} finally {
 			try {
+				socket.setSoLinger(true, 0);
 				socket.close();
 			} catch (IOException e) {
 			}

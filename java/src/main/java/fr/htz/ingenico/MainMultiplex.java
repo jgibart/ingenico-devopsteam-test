@@ -7,16 +7,16 @@ import java.io.InputStream;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.StandardSocketOptions;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -24,7 +24,7 @@ import org.yaml.snakeyaml.Yaml;
 
 public class MainMultiplex {
 	//30 seconds connect timeout
-	private static final long timeout = 30000;
+	private static final long timeout = 10000;
 	String[] args;
 	Yaml yaml = new Yaml();
 
@@ -59,80 +59,64 @@ public class MainMultiplex {
 		}
 		selector = Selector.open();
 
-		startSubmittingThread();
-
+		for ( String arg : args)
+			readTodo(arg);
 		handleSockets();
 		
-    	reportDone() ;
 		
 		selector.close();
 
 	}
-	private volatile boolean allSubmitted = false;
+
 
 	static Logger logger = Logger.getLogger("");
 	Thread submittingThread;
 
 	void handleSockets() throws IOException {
+		todoIt = todo.iterator();
 		while (selector.isOpen()) {
-			if ( selector.keys().size() == 0 && allSubmitted)
+			injectWork();
+			if ( selector.keys().size() == 0 && ! todoIt.hasNext())
 				break;
 	        logger.fine("we have "+selector.keys().size()+" sockets to handle ");
-	        if (selector.select(1000) <= 0) {
-	        	reportDone() ;
-	        	try {
-					Thread.sleep(1000);
-				} catch (InterruptedException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
+	        if (selector.select(1000) > 0) {
+		        Set<SelectionKey> selectedKeys = selector.selectedKeys();
+		        logger.finer("we have "+selectedKeys.size()+"/"+selector.keys().size()+" sockets to process");
+				Iterator<SelectionKey> keyIterator = selectedKeys.iterator();
+				while (keyIterator.hasNext()) {
+	
+					SelectionKey key = keyIterator.next();
+					Context ctx = (Context) key.attachment();
+					if (!key.isValid()) {
+						ctx.success = false;
+						ctx.exception = new IllegalStateException("selector key invalid");
+					} else if (key.isConnectable()) {
+						// a connection was established with a remote server.
+						finishConnect(ctx);
+					}
+					ctx.done = true;
+	
+					keyIterator.remove();
 				}
-	            continue;
 	        }
-	        Set<SelectionKey> selectedKeys = selector.selectedKeys();
-	        logger.finer("we have "+selectedKeys.size()+"/"+selector.keys().size()+" sockets to process");
-			Iterator<SelectionKey> keyIterator = selectedKeys.iterator();
-			while (keyIterator.hasNext()) {
-
-				SelectionKey key = keyIterator.next();
-				Context ctx = (Context) key.attachment();
-				if (!key.isValid()) {
-					ctx.success = false;
-					ctx.exception = new IllegalStateException("selector key invalid");
-				} else if (key.isConnectable()) {
-					// a connection was established with a remote server.
-					finishConnect(ctx);
-				}
-				ctx.done = true;
-
-				keyIterator.remove();
-			}
+			manageTimeouts();
+        	reportDone() ;
 		}
 
 	}
-	private void startSubmittingThread() {
-		submittingThread = new Thread(new Runnable() {
 
 
-			@Override
-			public void run() {
-				try {
-					for (String arg : args) {
-						doChecksOn(arg);
-					}
-
-				} catch (Exception e) {
-					logger.log(Level.SEVERE, "dying with ", e);
-				}
-				allSubmitted = true;
-			}
-		});
-
-		submittingThread.start();
-
+	private void injectWork() {
+		while ( selector.keys().size() < numSockets && todoIt.hasNext()) {
+			Context ctx = todoIt.next();
+			checkConnectivityFor(ctx);
+		}
+		
 	}
 
-
-	private void doChecksOn(String arg) throws Exception {
+	List<Context> todo = new ArrayList<>(1000);
+	Iterator<Context> todoIt;
+	private void readTodo(String arg) throws Exception {
 		File inputFile = new File(arg);
 		try (InputStream inputStream = new FileInputStream(inputFile)) {
 			Map<String, Object> obj = yaml.load(inputStream);
@@ -143,7 +127,7 @@ public class MainMultiplex {
 				String key = ent.getKey();
 				String value = (String) ent.getValue();
 				final Context here = new Context(key, value);
-				checkConnectivityFor(here);
+				todo.add(here);
 			}
 		}
 
@@ -152,15 +136,6 @@ public class MainMultiplex {
 	private void checkConnectivityFor(final Context testToDo) {
 		try {
 			logger.fine("submitting "+testToDo.address);
-			long start = System.currentTimeMillis();
-			long times []= new long[100];
-			times [0 ] = start;
-			while ( selector.keys().size() >= this.numSockets ) {
-				synchronized (this) {
-					wait(1000);
-				}
-			}
-			times [1] = System.currentTimeMillis();
 			String parts[] = testToDo.address.split(":");
 			if (parts.length != 2)
 				throw new IllegalStateException("Unexpected format in " + testToDo.address);
@@ -171,38 +146,20 @@ public class MainMultiplex {
 			} catch (Exception e) {
 				throw new IllegalStateException("Unexpected number format in " + parts[1]);
 			}
-			times [2] = System.currentTimeMillis();
 			InetAddress inetAddress = InetAddress.getByName(host);
-			times [3] = System.currentTimeMillis();
 			InetSocketAddress endpoint = new InetSocketAddress(inetAddress , port);
-			times [4] = System.currentTimeMillis();
 
 			testToDo.socketChannel = SocketChannel.open();
-			times [5] = System.currentTimeMillis();
 			testToDo.socketChannel.configureBlocking(false);
-			times [6] = System.currentTimeMillis();
 			testToDo.selkey =  testToDo.socketChannel.register(selector, SelectionKey.OP_CONNECT, testToDo);
-			times [7] = System.currentTimeMillis();
 			boolean connected = testToDo.socketChannel.connect(endpoint);
 			testToDo.connectTime = System.currentTimeMillis();
-			times [8] = testToDo.connectTime ;
-			synchronized (this) {
 				
-				allContexts.add(testToDo);
-			}
-			times [9] = System.currentTimeMillis();
+			allContexts.add(testToDo);
 			if (connected) {
 				finishConnect(testToDo);
 			}
-			times [10] = System.currentTimeMillis();
-			String timesString = "";
-			for ( int i = 1; i <=10; i++) {
-				long elapsed = times[i]-times[i-1];
-				if (elapsed > 5) {
-					timesString += " timer["+i+"]="+elapsed;
-				}
-			}
-			logger.finer("submitted  "+testToDo.address+ " "+timesString);
+			logger.finer("submitted  "+testToDo.address);
 		} catch (Exception e) {
 			testToDo.success = false;
 			testToDo.done = true;
@@ -216,6 +173,8 @@ public class MainMultiplex {
 		try {
 			testToDo.success= testToDo.socketChannel.finishConnect();
 			testToDo.selkey.cancel();
+			testToDo.socketChannel.configureBlocking(true);
+			testToDo.socketChannel.setOption(StandardSocketOptions.SO_LINGER, 0);
 			testToDo.socketChannel.close();
 
 			
@@ -224,9 +183,6 @@ public class MainMultiplex {
 			testToDo.exception = e;
 		} finally {
 			testToDo.done = true;
-			synchronized (this) {
-				notify();
-			}
 		}
 		long end = System.currentTimeMillis();
 		long ms = end - testToDo.connectTime;
@@ -234,25 +190,32 @@ public class MainMultiplex {
 		reportDone();
 
 	}
-
-	private synchronized void reportDone() {
-		Iterator<Context> it = allContexts.iterator();
+	private void manageTimeouts() {
 		long now = System.currentTimeMillis();
-		boolean allDone = true;
-		while ( it.hasNext()) {
-			Context ctx = it.next();
+		for ( SelectionKey key : selector.keys()) {
+			Context ctx = (Context )key.attachment();
 			long elapsed = now - ctx.connectTime;
 			if ( elapsed > timeout) {
 				//timeout
+				key .cancel();
 				try {
 					if ( ctx.socketChannel != null)
 						ctx.socketChannel.close();
+					
 				} catch (IOException e) {
 				}
 				ctx.exception = new ConnectException("timeout after "+timeout +" ms");
 				ctx.done = true;
 				logger.fine("timout for  "+ ctx.key);
 			}
+		}
+	}
+
+	private void reportDone() {
+		Iterator<Context> it = allContexts.iterator();
+		boolean allDone = true;
+		while ( it.hasNext()) {
+			Context ctx = it.next();
 			if ( !ctx.done)
 				allDone = false;
 			else {
