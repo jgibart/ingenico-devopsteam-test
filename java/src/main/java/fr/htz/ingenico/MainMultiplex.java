@@ -33,7 +33,7 @@ public class MainMultiplex {
 	}
 
 	final int numSockets = 200;
-	BlockingQueue<Context> contexts = new ArrayBlockingQueue<Context>(numSockets);
+	List<Context> allContexts = new LinkedList<Context>();
 	Selector selector = null;
 
 	static class Context {
@@ -63,6 +63,7 @@ public class MainMultiplex {
 
 		handleSockets();
 		
+    	reportDone() ;
 		
 		selector.close();
 
@@ -76,10 +77,19 @@ public class MainMultiplex {
 		while (selector.isOpen()) {
 			if ( selector.keys().size() == 0 && allSubmitted)
 				break;
-	        if (selector.select(1000) <= 0)
-	             continue;		
+	        logger.fine("we have "+selector.keys().size()+" sockets to handle ");
+	        if (selector.select(1000) <= 0) {
+	        	reportDone() ;
+	        	try {
+					Thread.sleep(1000);
+				} catch (InterruptedException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+	            continue;
+	        }
 	        Set<SelectionKey> selectedKeys = selector.selectedKeys();
-	        logger.info("we have "+selectedKeys.size()+"/"+selector.keys().size()+" to handle while queue is "+contexts.size());
+	        logger.finer("we have "+selectedKeys.size()+"/"+selector.keys().size()+" sockets to process");
 			Iterator<SelectionKey> keyIterator = selectedKeys.iterator();
 			while (keyIterator.hasNext()) {
 
@@ -134,8 +144,6 @@ public class MainMultiplex {
 				String value = (String) ent.getValue();
 				final Context here = new Context(key, value);
 				checkConnectivityFor(here);
-
- 
 			}
 		}
 
@@ -145,6 +153,14 @@ public class MainMultiplex {
 		try {
 			logger.fine("submitting "+testToDo.address);
 			long start = System.currentTimeMillis();
+			long times []= new long[100];
+			times [0 ] = start;
+			while ( selector.keys().size() >= this.numSockets ) {
+				synchronized (this) {
+					wait(1000);
+				}
+			}
+			times [1] = System.currentTimeMillis();
 			String parts[] = testToDo.address.split(":");
 			if (parts.length != 2)
 				throw new IllegalStateException("Unexpected format in " + testToDo.address);
@@ -155,24 +171,43 @@ public class MainMultiplex {
 			} catch (Exception e) {
 				throw new IllegalStateException("Unexpected number format in " + parts[1]);
 			}
-			InetSocketAddress endpoint = new InetSocketAddress(InetAddress.getByName(host), port);
-			long dns = System.currentTimeMillis();
-			contexts.put(testToDo);
+			times [2] = System.currentTimeMillis();
+			InetAddress inetAddress = InetAddress.getByName(host);
+			times [3] = System.currentTimeMillis();
+			InetSocketAddress endpoint = new InetSocketAddress(inetAddress , port);
+			times [4] = System.currentTimeMillis();
+
 			testToDo.socketChannel = SocketChannel.open();
+			times [5] = System.currentTimeMillis();
 			testToDo.socketChannel.configureBlocking(false);
+			times [6] = System.currentTimeMillis();
 			testToDo.selkey =  testToDo.socketChannel.register(selector, SelectionKey.OP_CONNECT, testToDo);
+			times [7] = System.currentTimeMillis();
 			boolean connected = testToDo.socketChannel.connect(endpoint);
 			testToDo.connectTime = System.currentTimeMillis();
+			times [8] = testToDo.connectTime ;
+			synchronized (this) {
+				
+				allContexts.add(testToDo);
+			}
+			times [9] = System.currentTimeMillis();
 			if (connected) {
 				finishConnect(testToDo);
 			}
-			long end = System.currentTimeMillis();
-			long ms = end - start;
-			logger.finer("submitted  "+testToDo.address+ " in "+ms +" ms. dns in "+(dns - start)+"ms.  Queue is now "+contexts.size());
+			times [10] = System.currentTimeMillis();
+			String timesString = "";
+			for ( int i = 1; i <=10; i++) {
+				long elapsed = times[i]-times[i-1];
+				if (elapsed > 5) {
+					timesString += " timer["+i+"]="+elapsed;
+				}
+			}
+			logger.finer("submitted  "+testToDo.address+ " "+timesString);
 		} catch (Exception e) {
 			testToDo.success = false;
 			testToDo.done = true;
 			testToDo.exception = e;
+			logger.fine("error "+e);
 		}
 
 	}
@@ -182,22 +217,28 @@ public class MainMultiplex {
 			testToDo.success= testToDo.socketChannel.finishConnect();
 			testToDo.selkey.cancel();
 			testToDo.socketChannel.close();
+
+			
 		} catch (Exception e) {
 			testToDo.success = false;
 			testToDo.exception = e;
 		} finally {
 			testToDo.done = true;
+			synchronized (this) {
+				notify();
+			}
 		}
 		long end = System.currentTimeMillis();
 		long ms = end - testToDo.connectTime;
-		System.out.println("got result for   "+testToDo.key+ " in "+ms +" ms");
+		logger.fine("got result for   "+testToDo.key+ " in "+ms +" ms  . Allresults is "+allContexts.size()+ " pending connects "+selector.keys().size());
 		reportDone();
 
 	}
 
-	private void reportDone() {
-		Iterator<Context> it = contexts.iterator();
+	private synchronized void reportDone() {
+		Iterator<Context> it = allContexts.iterator();
 		long now = System.currentTimeMillis();
+		boolean allDone = true;
 		while ( it.hasNext()) {
 			Context ctx = it.next();
 			long elapsed = now - ctx.connectTime;
@@ -210,12 +251,18 @@ public class MainMultiplex {
 				}
 				ctx.exception = new ConnectException("timeout after "+timeout +" ms");
 				ctx.done = true;
+				logger.fine("timout for  "+ ctx.key);
 			}
 			if ( !ctx.done)
-				break;
-			it.remove();
-			System.out.println(String.format("%s: %s", ctx.success ? "OK":"BAD", ctx.key));
-//			System.out.println(String.format("%s: %s%s", ctx.success ? "OK":"BAD", ctx.key, (ctx.exception == null ? "" :ctx.exception .toString() ) ));
+				allDone = false;
+			else {
+				if ( allDone)  {
+					it.remove();
+					System.out.println(String.format("%s: %s", ctx.success ? "OK":"BAD", ctx.key));
+//					System.out.println(String.format("%s: %s%s", ctx.success ? "OK":"BAD", ctx.key, (ctx.exception == null ? "" :ctx.exception .toString() ) ));
+					
+				}
+			}
 
 		}
 		
